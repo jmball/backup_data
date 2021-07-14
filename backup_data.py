@@ -2,11 +2,15 @@
 
 import argparse
 import logging
-import pathlib
+import shutil
 import subprocess
 import time
 
-import watchdog
+import watchdog.events
+import watchdog.observers
+
+# TODO: add logging to file
+logging.basicConfig(level=logging.DEBUG)
 
 
 def get_args():
@@ -65,3 +69,52 @@ def sync(source, destination):
             f"/log:{time_str}_log.txt",
         ]
     )
+
+
+class MyEventHandler(watchdog.events.FileSystemEventHandler):
+    """Custom file system event handler."""
+
+    destination = ""
+
+    def on_created(self, event):
+        """Copy a file from source to destination.
+
+        Parameters
+        ----------
+        event : watchdog.events.FileSystemEvent
+            File system event.
+        """
+        shutil.copy2(event.src_path, self.destination)
+
+
+def main(source, destination):
+    """Run the watchdog, copying new files in source dir to destination dir.
+
+    Parameters
+    ----------
+    source : str
+        Source directory.
+    destination : str
+        Destination directory.
+    """
+    event_handler = MyEventHandler()
+    event_handler.destination = destination
+    observer = watchdog.observers.Observer()
+    observer.schedule(event_handler, source, recursive=True)
+    observer.start()
+    try:
+        while True:
+            time.sleep(1)
+    finally:
+        observer.stop()
+        observer.join()
+
+
+if __name__ == "__main__":
+    args = get_args()
+
+    # run a sync first in case anything was missed since last run
+    sync(args.source, args.destination)
+
+    # start watchdog and run forever
+    main(args.source, args.destination)
