@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import pathlib
 import shutil
 import subprocess
 import time
@@ -74,7 +75,8 @@ def sync(source, destination):
 class MyEventHandler(watchdog.events.FileSystemEventHandler):
     """Custom file system event handler."""
 
-    destination = ""
+    source = pathlib.Path()
+    destination = pathlib.Path()
 
     def on_created(self, event):
         """Copy a file from source to destination.
@@ -84,7 +86,17 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
         event : watchdog.events.FileSystemEvent
             File system event.
         """
-        shutil.copy2(event.src_path, self.destination)
+        src = pathlib.Path(event.src_path)
+        src_tail = src.parts[len(self.source.parts) :]
+
+        dst = self.destination
+        for part in src_tail:
+            dst = dst.joinpath(part)
+
+        if src.is_dir() and (dst.exists() is False):
+            shutil.copytree(src, dst)
+        elif dst.exists() is False:
+            shutil.copy2(src, dst)
 
 
 def main(source, destination):
@@ -98,7 +110,8 @@ def main(source, destination):
         Destination directory.
     """
     event_handler = MyEventHandler()
-    event_handler.destination = destination
+    event_handler.source = pathlib.Path(source)
+    event_handler.destination = pathlib.Path(destination)
     observer = watchdog.observers.Observer()
     observer.schedule(event_handler, source, recursive=True)
     observer.start()
