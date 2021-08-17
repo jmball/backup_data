@@ -10,20 +10,18 @@ import time
 import watchdog.events
 import watchdog.observers
 
-# TODO: add logging to file
-logging.basicConfig(level=logging.DEBUG)
-
 
 def get_args():
     """Get command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--source", help="Source directory.")
     parser.add_argument("-d", "--destination", help="Destination directory.")
+    parser.add_argument("-l", "--log_dir", default="", help="Log directory.")
 
     return parser.parse_args()
 
 
-def sync(source, destination):
+def sync(source, destination, log_dir):
     """Backup source to destination using robocopy.
 
     Uses call to robocopy, which is Windows only.
@@ -32,11 +30,14 @@ def sync(source, destination):
     ----------
     source : str
         Source directory.
-    destination
+    destination : str
         Destination directory.
+    log_dir : str
+        Log directory.
     """
     # time string for robocopy log filename
     time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    log_path = pathlib.Path(log_dir).joinpath(f"{time_str}_robocopy.log")
 
     # robocopy parameter meanings:
     # /e Copies subdirectories. This option automatically includes empty directories.
@@ -67,7 +68,7 @@ def sync(source, destination):
             "/nfl",
             "/ndl",
             "/np",
-            f"/log:{time_str}_log.txt",
+            f"/log:'{log_path}'",
         ]
     )
 
@@ -77,6 +78,7 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
 
     source = pathlib.Path()
     destination = pathlib.Path()
+    logger = None
 
     def on_created(self, event):
         """Copy a file from source to destination.
@@ -94,12 +96,57 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
             dst = dst.joinpath(part)
 
         if src.is_dir() and (dst.exists() is False):
-            shutil.copytree(src, dst)
+            try:
+                shutil.copytree(src, dst)
+                self.logger.info(f"New folder: {str(dst)}")
+            except FileNotFoundError:
+                self.logger.exception()
         elif dst.exists() is False:
-            shutil.copy2(src, dst)
+            try:
+                shutil.copy2(src, dst)
+                self.logger.debug(f"Copied file to: {str(dst)}")
+            except FileNotFoundError:
+                self.logger.exception()
+        else:
+            self.logger.debug(f"Cannot copy file/folder: {str(dst)} already exists")
 
 
-def main(source, destination):
+def create_logger(log_dir):
+    """Create a logger.
+
+    Parameters
+    ----------
+    log_dir : str
+        Log directory.
+    """
+    # create logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+
+    # add file handler and set level to info
+    time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    fh = logging.FileHandler(pathlib.Path(log_dir).joinpath(f"{time_str}_watchdog.log"))
+    fh.setLevel(logging.DEBUG)
+
+    # create formatter
+    formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s|%(message)s")
+
+    # add formatter to ch and fh
+    ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+
+    # add ch and fh to logger
+    logger.addHandler(ch)
+    logger.addHandler(fh)
+
+    return logger
+
+
+def main(source, destination, log_dir):
     """Run the watchdog, copying new files in source dir to destination dir.
 
     Parameters
@@ -108,10 +155,19 @@ def main(source, destination):
         Source directory.
     destination : str
         Destination directory.
+    log_dir : str
+        Log directory.
     """
+    # setup logging
+    logger = create_logger(log_dir)
+    logger.info(f"Source directory: {source}")
+    logger.info(f"Destination directory: {destination}")
+
+    # setup watchdog
     event_handler = MyEventHandler()
     event_handler.source = pathlib.Path(source)
     event_handler.destination = pathlib.Path(destination)
+    event_handler.logger = logger
     observer = watchdog.observers.Observer()
     observer.schedule(event_handler, source, recursive=True)
     observer.start()
@@ -127,7 +183,7 @@ if __name__ == "__main__":
     args = get_args()
 
     # run a sync first in case anything was missed since last run
-    sync(args.source, args.destination)
+    sync(args.source, args.destination, args.log_dir)
 
     # start watchdog and run forever
-    main(args.source, args.destination)
+    main(args.source, args.destination, args.log_dir)
