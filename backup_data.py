@@ -101,7 +101,7 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
             dst = dst.joinpath(part)
 
         # copy file or folder if destination doesn't already exist
-        if dst.is_file():
+        if src.is_file():
             if dst.exists():
                 self.logger.debug(f"Cannot copy file: '{str(dst)}' already exists")
             else:
@@ -193,6 +193,7 @@ def main(source, destination, log_dir):
     # standard observer sometimes misses file creation events but polling observer
     # seems more robust
     observer = watchdog.observers.polling.PollingObserver()
+    # observer = watchdog.observers.Observer()
     observer.schedule(event_handler, source, recursive=True)
     observer.start()
     try:
