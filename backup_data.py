@@ -120,6 +120,9 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                 # large files and complex directories can take time to become
                 # available after a file creation event so wait until file creation
                 # at source is finished
+                timeout = 60
+                t0 = time.time()
+                timed_out = False
                 while True:
                     try:
                         # renaming isn't possible on Windows while file is being copied
@@ -133,12 +136,18 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                         )
                         time.sleep(0.5)
 
+                    if time.time() - t0 > timeout:
+                        self.logger.warning(f"Waiting for file copy timed out: {src}")
+                        timed_out = True
+                        break
+
                 # attempt copy
-                try:
-                    shutil.copy2(src, dst)
-                    self.logger.debug(f"Copied file to: {str(dst)}")
-                except FileNotFoundError:
-                    self.logger.exception()
+                if not (timed_out):
+                    try:
+                        shutil.copy2(src, dst)
+                        self.logger.debug(f"Copied file to: {str(dst)}")
+                    except FileNotFoundError:
+                        self.logger.exception()
 
 
 def create_logger(log_dir, log_level):
