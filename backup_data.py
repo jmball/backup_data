@@ -19,6 +19,13 @@ def get_args():
     parser.add_argument("-s", "--source", help="Source directory.")
     parser.add_argument("-d", "--destination", help="Destination directory.")
     parser.add_argument("-l", "--log_dir", default="", help="Log directory.")
+    parser.add_argument(
+        "-v",
+        "--log_level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Log level.",
+    )
 
     return parser.parse_args()
 
@@ -108,6 +115,7 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                 # make sure parent folder exists in destination
                 if not (dst.parent.exists()):
                     dst.parent.mkdir(parents=True)
+                    self.logger.info(f"Created directory: {dst.parent}")
 
                 # large files and complex directories can take time to become
                 # available after a file creation event so wait until file creation
@@ -120,7 +128,9 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                         break
                     except OSError:
                         self.logger.exception()
-                        self.logger.info(f"Waiting for file to finish copying: {src}")
+                        self.logger.warning(
+                            f"Waiting for file to finish copying: {src}"
+                        )
                         time.sleep(0.5)
 
                 # attempt copy
@@ -131,26 +141,28 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                     self.logger.exception()
 
 
-def create_logger(log_dir):
+def create_logger(log_dir, log_level):
     """Create a logger.
 
     Parameters
     ----------
     log_dir : str
         Log directory.
+    log_level : int
+        Log level.
     """
     # create logger
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(log_level)
 
     # create console handler and set level to debug
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    ch.setLevel(log_level)
 
     # add file handler and set level to info
     time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime())
     fh = logging.FileHandler(pathlib.Path(log_dir).joinpath(f"{time_str}_watchdog.log"))
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(log_level)
 
     # create formatter
     formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s|%(message)s")
@@ -166,7 +178,7 @@ def create_logger(log_dir):
     return logger
 
 
-def main(source, destination, log_dir):
+def main(source, destination, log_dir, log_level):
     """Run the watchdog, copying new files in source dir to destination dir.
 
     Parameters
@@ -177,9 +189,11 @@ def main(source, destination, log_dir):
         Destination directory.
     log_dir : str
         Log directory.
+    log_level : int
+        Log level.
     """
     # setup logging
-    logger = create_logger(log_dir)
+    logger = create_logger(log_dir, log_level)
     logger.info(f"Source directory: {source}")
     logger.info(f"Destination directory: {destination}")
 
@@ -207,8 +221,11 @@ def main(source, destination, log_dir):
 if __name__ == "__main__":
     args = get_args()
 
+    # get log level number
+    log_level_num = getattr(logging, args.log_level.upper())
+
     # run a sync first in case anything was missed since last run
     sync(args.source, args.destination, args.log_dir)
 
     # start watchdog and run forever
-    main(args.source, args.destination, args.log_dir)
+    main(args.source, args.destination, args.log_dir, log_level_num)
