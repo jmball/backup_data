@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import pathlib
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import time
 
 import watchdog.events
 import watchdog.observers
+import watchdog.observers.polling
 
 
 def get_args():
@@ -68,7 +70,7 @@ def sync(source, destination, log_dir):
             "/nfl",
             "/ndl",
             "/np",
-            f"/log:'{log_path}'",
+            f"/log:{log_path}",
         ]
     )
 
@@ -83,32 +85,50 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
     def on_created(self, event):
         """Copy a file from source to destination.
 
+        Ignores folder paths.
+
         Parameters
         ----------
         event : watchdog.events.FileSystemEvent
             File system event.
         """
         src = pathlib.Path(event.src_path)
-        src_tail = src.parts[len(self.source.parts) :]
 
+        # build destination path
         dst = self.destination
+        src_tail = src.parts[len(self.source.parts) :]
         for part in src_tail:
             dst = dst.joinpath(part)
 
-        if src.is_dir() and (dst.exists() is False):
-            try:
-                shutil.copytree(src, dst)
-                self.logger.info(f"New folder: {str(dst)}")
-            except FileNotFoundError:
-                self.logger.exception()
-        elif dst.exists() is False:
-            try:
-                shutil.copy2(src, dst)
-                self.logger.debug(f"Copied file to: {str(dst)}")
-            except FileNotFoundError:
-                self.logger.exception()
-        else:
-            self.logger.debug(f"Cannot copy file/folder: {str(dst)} already exists")
+        # copy file or folder if destination doesn't already exist
+        if dst.is_file():
+            if dst.exists():
+                self.logger.debug(f"Cannot copy file: '{str(dst)}' already exists")
+            else:
+                # make sure parent folder exists in destination
+                if not (dst.parent.exists()):
+                    dst.parent.mkdir(parents=True)
+
+                # large files and complex directories can take time to become
+                # available after a file creation event so wait until file creation
+                # at source is finished
+                while True:
+                    try:
+                        # renaming isn't possible on Windows while file is being copied
+                        # so if there's no error here the file has finished copying
+                        os.rename(src, src)
+                        break
+                    except OSError:
+                        self.logger.exception()
+                        self.logger.info(f"Waiting for file to finish copying: {src}")
+                        time.sleep(0.5)
+
+                # attempt copy
+                try:
+                    shutil.copy2(src, dst)
+                    self.logger.debug(f"Copied file to: {str(dst)}")
+                except FileNotFoundError:
+                    self.logger.exception()
 
 
 def create_logger(log_dir):
@@ -163,12 +183,16 @@ def main(source, destination, log_dir):
     logger.info(f"Source directory: {source}")
     logger.info(f"Destination directory: {destination}")
 
-    # setup watchdog
+    # setup watchdog event handler
     event_handler = MyEventHandler()
     event_handler.source = pathlib.Path(source)
     event_handler.destination = pathlib.Path(destination)
     event_handler.logger = logger
-    observer = watchdog.observers.Observer()
+
+    # setup watchdog observer
+    # standard observer sometimes misses file creation events but polling observer
+    # seems more robust
+    observer = watchdog.observers.polling.PollingObserver()
     observer.schedule(event_handler, source, recursive=True)
     observer.start()
     try:
