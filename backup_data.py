@@ -248,8 +248,11 @@ def main(source, destination, log_dir, log_level):
     event_handler.logger = logger
 
     # setup watchdog observer
-    # standard observer sometimes misses file creation events but polling observer
-    # seems more robust
+    # standard observer sometimes misses file creation events when copying lots of
+    # files at once into source
+    # polling observer seems more robust but is extremely slow when watching folders
+    # containing lots of file
+    # for present use case standard observer is probably fine
     # observer = watchdog.observers.polling.PollingObserver()
     observer = watchdog.observers.Observer()
     observer.schedule(event_handler, source, recursive=True)
