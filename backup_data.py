@@ -7,6 +7,7 @@ import pathlib
 import shutil
 import subprocess
 import time
+from typing import Type
 
 import watchdog.events
 import watchdog.observers
@@ -46,7 +47,13 @@ def sync(source, destination, log_dir):
     """
     # time string for robocopy log filename
     time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-    log_path = pathlib.Path(log_dir).joinpath(f"{time_str}_robocopy.log")
+    src_str = (
+        "-".join(pathlib.Path(source).parts)
+        .replace("\\", "")
+        .replace(":", "")
+        .replace(" ", "")
+    )
+    log_path = pathlib.Path(log_dir).joinpath(f"{time_str}_{src_str}_robocopy.log")
 
     # robocopy parameter meanings:
     # /e Copies subdirectories. This option automatically includes empty directories.
@@ -68,7 +75,6 @@ def sync(source, destination, log_dir):
             source,
             destination,
             "/e",
-            "/mt:128",
             "/xc",
             "/xn",
             "/xo",
@@ -123,18 +129,37 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                 timeout = 60
                 t0 = time.time()
                 timed_out = False
+                file_size_old = 0
                 while True:
                     try:
-                        # renaming isn't possible on Windows while file is being copied
-                        # so if there's no error here the file has finished copying
-                        os.rename(src, src)
-                        break
-                    except OSError:
-                        self.logger.exception()
+                        # opening isn't usually possible on Windows while file is being
+                        # copied so if there's no error here the file has probably
+                        # finished copying into source
+                        fo = open(src, "rb")
+                        fo.close()
+
+                        # Doesn't seem to be universally true e.g. for images copied
+                        # using FTP. It might be the case that FTP appends chunks of
+                        # data and once a chunk is done copying looks complete from
+                        # test above. Test if file size has changed to make sure
+                        file_size_new = os.path.getsize(src)
+                        if file_size_new == file_size_old:
+                            break
+
+                        file_size_old = file_size_new
+                        time.sleep(1)
+                    except PermissionError as e:
+                        self.logger.exception(e)
                         self.logger.warning(
                             f"Waiting for file to finish copying: {src}"
                         )
-                        time.sleep(0.5)
+                        time.sleep(1)
+                    except OSError as e:
+                        self.logger.exception(e)
+                        self.logger.warning(
+                            f"Waiting for file to finish copying: {src}"
+                        )
+                        time.sleep(1)
 
                     if time.time() - t0 > timeout:
                         self.logger.warning(f"Waiting for file copy timed out: {src}")
@@ -146,15 +171,17 @@ class MyEventHandler(watchdog.events.FileSystemEventHandler):
                     try:
                         shutil.copy2(src, dst)
                         self.logger.debug(f"Copied file to: {str(dst)}")
-                    except FileNotFoundError:
-                        self.logger.exception()
+                    except FileNotFoundError as e:
+                        self.logger.exception(e)
 
 
-def create_logger(log_dir, log_level):
+def create_logger(source, log_dir, log_level):
     """Create a logger.
 
     Parameters
     ----------
+    source : str
+        Source directory.
     log_dir : str
         Log directory.
     log_level : int
@@ -170,7 +197,15 @@ def create_logger(log_dir, log_level):
 
     # add file handler and set level to info
     time_str = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-    fh = logging.FileHandler(pathlib.Path(log_dir).joinpath(f"{time_str}_watchdog.log"))
+    src_str = (
+        "-".join(pathlib.Path(source).parts)
+        .replace("\\", "")
+        .replace(":", "")
+        .replace(" ", "")
+    )
+    fh = logging.FileHandler(
+        pathlib.Path(log_dir).joinpath(f"{time_str}_{src_str}_watchdog.log")
+    )
     fh.setLevel(log_level)
 
     # create formatter
@@ -202,7 +237,7 @@ def main(source, destination, log_dir, log_level):
         Log level.
     """
     # setup logging
-    logger = create_logger(log_dir, log_level)
+    logger = create_logger(source, log_dir, log_level)
     logger.info(f"Source directory: {source}")
     logger.info(f"Destination directory: {destination}")
 
@@ -215,8 +250,8 @@ def main(source, destination, log_dir, log_level):
     # setup watchdog observer
     # standard observer sometimes misses file creation events but polling observer
     # seems more robust
-    observer = watchdog.observers.polling.PollingObserver()
-    # observer = watchdog.observers.Observer()
+    # observer = watchdog.observers.polling.PollingObserver()
+    observer = watchdog.observers.Observer()
     observer.schedule(event_handler, source, recursive=True)
     observer.start()
     try:
